@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Chess — HTML & CSS</title>
+  <style>
+    :root{
+      --light:#f0d9b5;
+      --dark:#b58863;
+      --accent:#2b6cb0;
+      --panel:#0f1724;
+      --glass: rgba(255,255,255,0.06);
+    }
+    *{box-sizing:border-box;font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial}
+    body{margin:0;min-height:100vh;background:linear-gradient(180deg,#0b1220 0%, #071226 100%);color:#e6eef8;display:flex;align-items:center;justify-content:center;padding:28px}
+    .app{display:grid;grid-template-columns:420px 320px;gap:22px;width:100%;max-width:880px}
+
+    /* board */
+    .board-wrap{background:var(--panel);padding:18px;border-radius:14px;box-shadow:0 8px 30px rgba(2,6,23,0.7)}
+    .board{width:384px;height:384px;display:grid;grid-template-columns:repeat(8,1fr);border-radius:8px;overflow:hidden;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.02))}
+    .cell{display:flex;align-items:center;justify-content:center;font-size:30px;cursor:pointer;user-select:none}
+    .cell.light{background:var(--light);color:#222}
+    .cell.dark{background:var(--dark);color:#111}
+    .cell:hover{outline:4px solid rgba(255,255,255,0.06);}
+    .cell.selected{outline:4px solid rgba(43,108,176,0.45);}
+    .cell.move-target{box-shadow:inset 0 0 0 6px rgba(43,108,176,0.18);}
+
+    /* right panel */
+    .panel{background:var(--panel);padding:18px;border-radius:14px;box-shadow:0 8px 30px rgba(2,6,23,0.7);height:fit-content}
+    .status{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+    .turn-badge{padding:8px 12px;border-radius:999px;background:var(--glass);display:inline-flex;align-items:center;gap:8px}
+    .controls{display:flex;gap:8px;margin-bottom:12px}
+    button{background:transparent;border:1px solid rgba(255,255,255,0.06);color:inherit;padding:8px 10px;border-radius:8px;cursor:pointer}
+    .moves{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.02));padding:12px;border-radius:8px;max-height:240px;overflow:auto}
+    .move{font-family:monospace;font-size:14px;padding:6px 4px}
+    .coords{font-size:12px;color:#9fb0d2}
+
+    footer{grid-column:1 / -1;color:#8ea5c6;margin-top:12px;text-align:center;font-size:13px}
+
+    /* small screens */
+    @media (max-width:900px){
+      .app{grid-template-columns:1fr;max-width:420px}
+    }
+
+  </style>
+</head>
+<body>
+  <main class="app">
+    <section class="board-wrap">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;font-size:18px">Chess — HTML+CSS+JS</h3>
+        <div class="coords">use clicks: select piece → click target</div>
+      </div>
+
+      <div id="board" class="board" aria-label="Chess board"></div>
+    </section>
+
+    <aside class="panel">
+      <div class="status">
+        <div style="flex:1">
+          <div style="font-size:13px;color:#9fb0d2">Turn</div>
+          <div id="turn" class="turn-badge">White</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:13px;color:#9fb0d2">Move</div>
+          <div id="moveNum" style="font-weight:600">1</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="resetBtn">Reset</button>
+        <button id="flipBtn">Flip</button>
+        <button id="undoBtn">Undo</button>
+      </div>
+
+      <div style="font-size:13px;color:#9fb0d2;margin-bottom:8px">Move history</div>
+      <div id="moves" class="moves"></div>
+    </aside>
+
+    <footer>Built with plain HTML/CSS/JS — click a piece, then click a legal square. Promotions become queen automatically.</footer>
+  </main>
+
+  <script>
+    // Simple chess implementation for two local players
+    // Uses Unicode pieces. This implementation enforces basic legal moves (movement rules + capture)
+    // It does NOT check for checks/checkmates or en-passant. Castling implemented with simple conditions (no check verification).
+
+    const boardEl = document.getElementById('board');
+    const turnEl = document.getElementById('turn');
+    const movesEl = document.getElementById('moves');
+    const moveNumEl = document.getElementById('moveNum');
+    const resetBtn = document.getElementById('resetBtn');
+    const flipBtn = document.getElementById('flipBtn');
+    const undoBtn = document.getElementById('undoBtn');
+
+    const FILES = ['a','b','c','d','e','f','g','h'];
+
+    const UNICODE = {
+      'P_w': '♙','R_w':'♖','N_w':'♘','B_w':'♗','Q_w':'♕','K_w':'♔',
+      'P_b': '♟','R_b':'♜','N_b':'♞','B_b':'♝','Q_b':'♛','K_b':'♚'
+    };
+
+    // board model: 8x8 array, row 0 is rank 8, row7 is rank1
+    let board = [];
+    let selected = null; // {r,c}
+    let legalTargets = [];
+    let whiteToMove = true;
+    let history = []; // {from:{r,c}, to:{r,c}, piece, captured, movedPieceHasMoved}
+    let flipped = false;
+
+    function cloneBoard(b){ return b.map(row => row.map(cell => cell ? {...cell} : null)); }
+
+    function initBoard(){
+      board = Array.from({length:8},_=>Array(8).fill(null));
+      const back = ['R','N','B','Q','K','B','N','R'];
+      for(let c=0;c<8;c++){
+        board[0][c] = {type:back[c], color:'b', hasMoved:false};
+        board[1][c] = {type:'P', color:'b', hasMoved:false};
+        board[6][c] = {type:'P', color:'w', hasMoved:false};
+        board[7][c] = {type:back[c], color:'w', hasMoved:false};
+      }
+      selected = null;
+      legalTargets = [];
+      whiteToMove = true;
+      history = [];
+      flipped = false;
+      render();
+      movesEl.innerHTML='';
+      moveNumEl.textContent = 1;
+      updateTurn();
+    }
+
+    function updateTurn(){ turnEl.textContent = whiteToMove ? 'White' : 'Black'; }
+
+    function render(){
+      boardEl.innerHTML = '';
+      for(let r=0;r<8;r++){
+        for(let c=0;c<8;c++){
+          const cell = document.createElement('div');
+          const light = ((r+c)%2===0);
+          cell.className = 'cell ' + (light ? 'light':'dark');
+          cell.dataset.r = r; cell.dataset.c = c;
+          // coordinates when not flipped: row 0 -> rank8
+          const displayR = flipped ? 7-r : r;
+          const displayC = flipped ? 7-c : c;
+
+          const piece = board[displayR][displayC];
+          if(piece){
+            const key = piece.type + '_' + piece.color;
+            cell.textContent = UNICODE[key] || piece.type;
+          }
+
+          // highlight selected
+          if(selected && selected.r==displayR && selected.c==displayC){
+            cell.classList.add('selected');
+          }
+          // highlight legal targets
+          if(legalTargets.some(t=>t.r==displayR && t.c==displayC)){
+            cell.classList.add('move-target');
+          }
+
+          cell.addEventListener('click', ()=>onCellClick(displayR,displayC));
+          boardEl.appendChild(cell);
+        }
+      }
+    }
+
+    function inBounds(r,c){ return r>=0 && r<8 && c>=0 && c<8; }
+
+    function pieceAt(r,c){ return inBounds(r,c) ? board[r][c] : null; }
+
+    function onCellClick(r,c){
+      const piece = pieceAt(r,c);
+      if(selected){
+        // if clicked on a legal target, move
+        const isTarget = legalTargets.some(t=>t.r==r && t.c==c);
+        if(isTarget){
+          makeMove(selected,{r,c});
+          selected = null; legalTargets = []; render(); return;
+        }
+      }
+      // if there's a piece of current color, select it
+      if(piece && piece.color === (whiteToMove ? 'w' : 'b')){
+        selected = {r,c};
+        legalTargets = generateLegalTargets(r,c);
+        render();
+        return;
+      }
+      // otherwise clear selection
+      selected = null; legalTargets = []; render();
+    }
+
+    function generateLegalTargets(r,c){
+      const p = pieceAt(r,c);
+      if(!p) return [];
+      const dirs = [];
+      const targets = [];
+      const color = p.color;
+      const forward = (color==='w') ? -1 : 1;
+
+      if(p.type==='P'){
+        // one forward
+        if(inBounds(r+forward,c) && !pieceAt(r+forward,c)) targets.push({r:r+forward,c});
+        // two forward if initial
+        const startRank = (color==='w')?6:1;
+        if(r===startRank && !pieceAt(r+forward,c) && !pieceAt(r+2*forward,c)) targets.push({r:r+2*forward,c});
+        // captures
+        for(const dc of [-1,1]){
+          const rr=r+forward, cc=c+dc;
+          if(inBounds(rr,cc) && pieceAt(rr,cc) && pieceAt(rr,cc).color!==color) targets.push({r:rr,c:cc});
+        }
+      } else if(p.type==='N'){
+        const deltas = [[2,1],[2,-1],[-2,1],[-2,-1],[1,2],[1,-2],[-1,2],[-1,-2]];
+        for(const [dr,dc] of deltas){const rr=r+dr,cc=c+dc;if(inBounds(rr,cc) && (!pieceAt(rr,cc) || pieceAt(rr,cc).color!==color)) targets.push({r:rr,c:cc});}
+      } else if(p.type==='B' || p.type==='R' || p.type==='Q'){
+        if(p.type==='B' || p.type==='Q') dirs.push([-1,-1],[-1,1],[1,-1],[1,1]);
+        if(p.type==='R' || p.type==='Q') dirs.push([-1,0],[1,0],[0,-1],[0,1]);
+        for(const [dr,dc] of dirs){
+          let rr=r+dr, cc=c+dc;
+          while(inBounds(rr,cc)){
+            if(!pieceAt(rr,cc)) targets.push({r:rr,c:cc});
+            else{ if(pieceAt(rr,cc).color!==color) targets.push({r:rr,c:cc}); break; }
+            rr+=dr; cc+=dc;
+          }
+        }
+      } else if(p.type==='K'){
+        for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){if(dr===0&&dc===0)continue;const rr=r+dr,cc=c+dc;if(inBounds(rr,cc) && (!pieceAt(rr,cc)||pieceAt(rr,cc).color!==color)) targets.push({r:rr,c:cc});}
+        // castling (simple): if king and rook haven't moved and path clear
+        if(!p.hasMoved){
+          // king side
+          if(inBounds(r,c+3)){
+            const rook = pieceAt(r,c+3);
+            if(rook && rook.type==='R' && !rook.hasMoved && !pieceAt(r,c+1) && !pieceAt(r,c+2)){
+              targets.push({r:r,c:c+2}); // castle short
+            }
+          }
+          // queen side
+          if(inBounds(r,c-4)){
+            const rook = pieceAt(r,c-4);
+            if(rook && rook.type==='R' && !rook.hasMoved && !pieceAt(r,c-1) && !pieceAt(r,c-2) && !pieceAt(r,c-3)){
+              targets.push({r:r,c:c-2}); // castle long
+            }
+          }
+        }
+      }
+      return targets;
+    }
+
+    function makeMove(from,to){
+      const piece = pieceAt(from.r,from.c);
+      const target = pieceAt(to.r,to.c);
+      // handle castling: if king moves two squares, move rook
+      const moveRecord = {from, to, piece: {...piece}, captured: target ? {...target} : null};
+      // promotion: auto-queen if pawn reaches last rank
+      if(piece.type==='P' && (to.r===0 || to.r===7)){
+        piece.type='Q';
+      }
+      // castling detection
+      if(piece.type==='K' && Math.abs(to.c - from.c) === 2){
+        if(to.c > from.c){ // king side
+          const rook = pieceAt(from.r,7);
+          board[from.r][5] = rook; board[from.r][7] = null; if(rook) rook.hasMoved = true;
+        } else { // queen side
+          const rook = pieceAt(from.r,0);
+          board[from.r][3] = rook; board[from.r][0] = null; if(rook) rook.hasMoved = true;
+        }
+      }
+
+      board[to.r][to.c] = piece;
+      board[from.r][from.c] = null;
+      piece.hasMoved = true;
+
+      history.push(moveRecord);
+      whiteToMove = !whiteToMove;
+      appendMoveToHistory(moveRecord);
+      moveNumEl.textContent = history.length + 1;
+      updateTurn();
+      render();
+    }
+
+    function appendMoveToHistory(m){
+      const from = coordFromRC(m.from.r,m.from.c);
+      const to = coordFromRC(m.to.r,m.to.c);
+      const p = m.piece.type;
+      const san = (m.piece.color==='w'? (Math.ceil(history.length/2)) : '') + ' ' + `${p}@${from}-${to}`;
+      const div = document.createElement('div'); div.className='move'; div.textContent = `${from} → ${to} ${m.captured? 'x':''}`; movesEl.appendChild(div);
+      movesEl.scrollTop = movesEl.scrollHeight;
+    }
+
+    function coordFromRC(r,c){
+      // r 0 -> rank 8, c 0 -> file a
+      const file = FILES[c];
+      const rank = 8 - r;
+      return file + rank;
+    }
+
+    // controls
+    resetBtn.addEventListener('click', initBoard);
+    flipBtn.addEventListener('click', ()=>{flipped=!flipped;render();});
+    undoBtn.addEventListener('click', ()=>{
+      const last = history.pop(); if(!last){return;} 
+      // revert
+      const {from,to,piece,captured} = last;
+      board[from.r][from.c] = {...piece};
+      board[to.r][to.c] = captured ? {...captured} : null;
+      whiteToMove = !whiteToMove;
+      // update move number and history list
+      movesEl.removeChild(movesEl.lastChild);
+      moveNumEl.textContent = history.length + 1;
+      updateTurn(); render();
+    });
+
+    // initialize
+    initBoard();
+
+  </script>
+</body>
+</html>
